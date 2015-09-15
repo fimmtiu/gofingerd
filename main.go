@@ -2,6 +2,7 @@ package main
 
 import "bufio"
 import "fmt"
+import "io"
 import "log"
 import "net"
 import "strconv"
@@ -49,18 +50,19 @@ func handleConnection(conn net.Conn) {
 	}
 
 	if len(request.Hosts) > 0 {
-		// FIXME: We should allow an option to permit forwarding, disabled by default.
-		log.Printf("Refused forwarding request from %s.", conn.RemoteAddr().String())
-		ConnWritef(conn, "No forwarding for you!")
-		return
-	}
-
-	if len(request.User) == 0 {
+		if conf.AllowQueryForwarding {
+			RespondWithForwardedQuery(conn, request)
+		} else {
+			log.Printf("Refused forwarding request from %s.", conn.RemoteAddr().String())
+			fmt.Fprint(conn, "This server does not permit request forwarding.\r\n")
+			return
+		}
+	} else if len(request.User) == 0 {
 		if conf.AllowUserListing {
 			RespondWithUserList(conn)
 		} else {
 			log.Printf("Refused user listing request from %s.", conn.RemoteAddr().String())
-			ConnWritef(conn, "No results; user listing disabled by administrator.")
+			fmt.Fprint(conn, "This server does not permit user listing.\r\n")
 		}
 	} else if conf.AllowApproximateSearch {
 		RespondWithApproximateSearch(conn, request)
@@ -81,18 +83,49 @@ func readRequest(conn net.Conn) (r.Request, error) {
 	return r.ParseRequest(input), nil
 }
 
+// Connect to a remote server, forward the user's query to them, and echo the response.
+func RespondWithForwardedQuery(conn net.Conn, request r.Request) {
+	host, forwarded_request := request.NextForwardingRequest()
+	forward_conn, err := net.Dial("tcp", host + ":79")
+	if err != nil {
+		log.Printf("Can't connect to %s on behalf of %s: %s.", host, conn.RemoteAddr().String(), err.Error())
+		fmt.Fprintf(conn, "Can't connect to %s: %s.\r\n", host, err.Error())
+		return
+	}
+	defer forward_conn.Close()
+	fmt.Fprintf(forward_conn, "%s\r\n", forwarded_request)
+
+	var bytes []byte
+	reader := bufio.NewReader(forward_conn)
+	for {
+		_, err := reader.Read(bytes)
+		if err != nil && err != io.EOF {
+			log.Printf("Error reading from %s on behalf of %s: %s.", host, conn.RemoteAddr().String(), err.Error())
+			fmt.Fprintf(conn, "Error reading from %s: %s.\r\n", host, err.Error())
+			return
+		}
+		if _, write_err := conn.Write(bytes); write_err != nil {
+			log.Printf("Error writing forwarded response from %s to %s: %s.", host, conn.RemoteAddr().String(), err.Error())
+			return
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+}
+
 // Show a list of all users on the system.
 func RespondWithUserList(conn net.Conn) {
 	users, err := u.ListAllUsers()
 	if err != nil {
 		log.Printf("ERROR: Can't enumerate users for %s: %s.", conn.RemoteAddr().String(), err.Error())
-		ConnWritef(conn, "An error occurred. Please try again later.")
+		fmt.Fprint(conn, "An error occurred. Please try again later.\r\n")
 		return
 	}
 
-	ConnWritef(conn, "User Name         Full Name")
+	fmt.Fprint(conn, "User Name         Full Name\r\n")
 	for _, user := range users {
-		ConnWritef(conn, "%-16s  %s", user.LoginName, user.FullName)
+		fmt.Fprintf(conn, "%-16s  %s\r\n", user.LoginName, user.FullName)
 	}
 }
 
@@ -100,14 +133,14 @@ func RespondWithUserList(conn net.Conn) {
 func RespondWithApproximateSearch(conn net.Conn, request r.Request) {
 	users, err := u.SearchUsers(request.User)
 	if err != nil {
-		ConnWritef(conn, "An error occurred. Please try again later.")
+		fmt.Fprint(conn, "An error occurred. Please try again later.\r\n")
 		log.Printf("ERROR: Can't enumerate users for %s: %s", conn.RemoteAddr().String(), err.Error())
 		return
 	}
 
 	if len(users) == 0 {
 		log.Printf("Found no users matching query \"%s\" from %s.", request.User, conn.RemoteAddr().String())
-		ConnWritef(conn, "Found no users matching your query.")
+		fmt.Fprint(conn, "Found no users matching your query.\r\n")
 	} else {
 		log.Printf("Found %d users matching query \"%s\" from %s.", len(users), request.User, conn.RemoteAddr().String())
 		for _, user := range users {
@@ -121,7 +154,7 @@ func RespondWithExactSearch(conn net.Conn, request r.Request) {
 	user, err := u.FindUser(request.User)
 	if err != nil {
 		log.Printf("ERROR: Can't look up user \"%s\" for %s: %s", request.User, conn.RemoteAddr().String(), err.Error())
-		ConnWritef(conn, "An error occurred. Please try again later.")
+		fmt.Fprint(conn, "An error occurred. Please try again later.\r\n")
 		return
 	}
 
@@ -129,21 +162,14 @@ func RespondWithExactSearch(conn net.Conn, request r.Request) {
 		RespondWithUser(conn, user)
 	} else {
 		log.Printf("Found no user matching query \"%s\" for %s.", request.User, conn.RemoteAddr().String())
-		ConnWritef(conn, "Found no users matching your query.")
+		fmt.Fprint(conn, "Found no users matching your query.\r\n")
 	}
 }
 
 // Show a detailed description of an individual user.
 func RespondWithUser(conn net.Conn, user u.User) {
-	ConnWritef(conn, "Login name: %-30s Home directory: %s", user.LoginName, user.HomeDir)
-	ConnWritef(conn, "Full name: %-31s Shell: %s", user.FullName, user.Shell)
+	fmt.Fprintf(conn, "Login name: %-30s Home directory: %s\r\n", user.LoginName, user.HomeDir)
+	fmt.Fprintf(conn, "Full name: %-31s Shell: %s\r\n", user.FullName, user.Shell)
 	conn.Write(user.GetPlanFile())
-	conn.Write([]byte("\r\n"))
-}
-
-// A little helper function which sends a single line to the client.
-func ConnWritef(conn net.Conn, format string, a ...interface{}) (int, error) {
-	line := fmt.Sprintf(format, a...)
-	line += "\r\n"
-	return conn.Write([]byte(line))
+	fmt.Fprint(conn, "\r\n")
 }
