@@ -13,6 +13,7 @@ import r "github.com/fimmtiu/gofingerd/request"
 import u "github.com/fimmtiu/gofingerd/users"
 
 var conf c.Config
+var userService chan u.UserCommand
 
 func main() {
 	conf = c.ReadConfig()
@@ -26,6 +27,10 @@ func main() {
 	}
 	defer listener.Close()
 	log.Printf("Listening on port %d.", conf.Port)
+
+	// Spin up the user service goroutine. (See comments in users.go.)
+	userService = make(chan u.UserCommand)
+	go u.StartService(userService)
 
 	// For every incoming connection, spin up a goroutine to handle the request.
 	for {
@@ -55,7 +60,6 @@ func handleConnection(conn net.Conn) {
 		} else {
 			log.Printf("Refused forwarding request from %s.", conn.RemoteAddr().String())
 			fmt.Fprint(conn, "This server does not permit request forwarding.\r\n")
-			return
 		}
 	} else if len(request.User) == 0 {
 		if conf.AllowUserListing {
@@ -116,34 +120,42 @@ func RespondWithForwardedQuery(conn net.Conn, request r.Request) {
 
 // Show a list of all users on the system.
 func RespondWithUserList(conn net.Conn) {
-	users, err := u.ListAllUsers()
-	if err != nil {
-		log.Printf("ERROR: Can't enumerate users for %s: %s.", conn.RemoteAddr().String(), err.Error())
+	responseChan := make(chan u.UserCommand)
+	cmd := u.UserCommand{u.ListAll, responseChan, "", nil, nil}
+	userService <- cmd
+	cmd = <-responseChan
+
+	if cmd.Err != nil {
+		log.Printf("ERROR: Can't enumerate users for %s: %s.", conn.RemoteAddr().String(), cmd.Err.Error())
 		fmt.Fprint(conn, "An error occurred. Please try again later.\r\n")
 		return
 	}
 
 	fmt.Fprint(conn, "User Name         Full Name\r\n")
-	for _, user := range users {
+	for _, user := range cmd.Users {
 		fmt.Fprintf(conn, "%-16s  %s\r\n", user.LoginName, user.FullName)
 	}
 }
 
 // Show all users whose name contains the client's input.
 func RespondWithApproximateSearch(conn net.Conn, request r.Request) {
-	users, err := u.SearchUsers(request.User)
-	if err != nil {
+	responseChan := make(chan u.UserCommand)
+	cmd := u.UserCommand{u.Search, responseChan, request.User, nil, nil}
+	userService <- cmd
+	cmd = <-responseChan
+
+	if cmd.Err != nil {
 		fmt.Fprint(conn, "An error occurred. Please try again later.\r\n")
-		log.Printf("ERROR: Can't enumerate users for %s: %s", conn.RemoteAddr().String(), err.Error())
+		log.Printf("ERROR: Can't enumerate users for %s: %s", conn.RemoteAddr().String(), cmd.Err.Error())
 		return
 	}
 
-	if len(users) == 0 {
+	if len(cmd.Users) == 0 {
 		log.Printf("Found no users matching query \"%s\" from %s.", request.User, conn.RemoteAddr().String())
 		fmt.Fprint(conn, "Found no users matching your query.\r\n")
 	} else {
-		log.Printf("Found %d users matching query \"%s\" from %s.", len(users), request.User, conn.RemoteAddr().String())
-		for _, user := range users {
+		log.Printf("Found %d users matching query \"%s\" from %s.", len(cmd.Users), request.User, conn.RemoteAddr().String())
+		for _, user := range cmd.Users {
 			RespondWithUser(conn, user)
 		}
 	}
@@ -151,15 +163,19 @@ func RespondWithApproximateSearch(conn net.Conn, request r.Request) {
 
 // Show the user whose exact name was provided by the client.
 func RespondWithExactSearch(conn net.Conn, request r.Request) {
-	user, err := u.FindUser(request.User)
-	if err != nil {
-		log.Printf("ERROR: Can't look up user \"%s\" for %s: %s", request.User, conn.RemoteAddr().String(), err.Error())
+	responseChan := make(chan u.UserCommand)
+	cmd := u.UserCommand{u.Find, responseChan, request.User, nil, nil}
+	userService <- cmd
+	cmd = <-responseChan
+
+	if cmd.Err != nil {
+		log.Printf("ERROR: Can't look up user \"%s\" for %s: %s", request.User, conn.RemoteAddr().String(), cmd.Err.Error())
 		fmt.Fprint(conn, "An error occurred. Please try again later.\r\n")
 		return
 	}
 
-	if len(user.LoginName) > 0 {
-		RespondWithUser(conn, user)
+	if len(cmd.Users) > 0 {
+		RespondWithUser(conn, cmd.Users[0])
 	} else {
 		log.Printf("Found no user matching query \"%s\" for %s.", request.User, conn.RemoteAddr().String())
 		fmt.Fprint(conn, "Found no users matching your query.\r\n")

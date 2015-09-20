@@ -11,6 +11,23 @@ import "log"
 import "os"
 import "strings"
 
+// All of this runs in a separate goroutine service so that getpwent &
+// friends don't get called from more than one goroutine at a time. Because
+// they're not re-entrant, requests which involve searching the user
+// database could return inconsistent results if they're called from
+// multiple goroutines at once.
+//
+// (The curious reader will no doubt wonder "Wouldn't it be vastly simpler
+// to just fork a subprocess for each connection, thus entirely avoiding
+// the issues of re-entrancy and resource contention?" Well, yes. Yes it
+// would. But the point here was to teach myself Go idioms, so...)
+
+const (
+	ListAll = 0
+	Search = 1
+	Find = 2
+)
+
 type User struct {
 	LoginName string
 	FullName string
@@ -18,10 +35,34 @@ type User struct {
 	Shell string
 }
 
-// FIXME: Move all this into a separate goroutine service so that getpwent
-// & friends don't get called from more than one goroutine at a time.
-// Because they're not re-entrant, concurrent requests which involve
-// searching the user database could presently return inconsistent results.
+// The request and response parameters are all in one struct so that we can
+// just modify the struct we're given and send it back, thus avoiding
+// allocating new objects that get passed between goroutines. (It's bad
+// enough that we have to allocate the response channels on every request
+// in the first place.)
+type UserCommand struct {
+	Type int
+	ResponseChannel chan UserCommand
+	Name string
+	Users []User
+	Err   error
+}
+
+func StartService(channel chan UserCommand) {
+	for {
+		cmd := <- channel
+		switch cmd.Type {
+		case ListAll:
+			cmd.Users, cmd.Err = ListAllUsers()
+		case Search:
+			cmd.Users, cmd.Err = SearchUsers(cmd.Name)
+		case Find:
+			users, err := FindUser(cmd.Name)
+			cmd.Users, cmd.Err = users, err
+		}
+		cmd.ResponseChannel <- cmd
+	}
+}
 
 // Returns a list of all users on the system.
 func ListAllUsers() ([]User, error) {
@@ -42,12 +83,12 @@ func ListAllUsers() ([]User, error) {
 }
 
 // Returns the User struct for a particular login name.
-func FindUser(name string) (User, error) {
+func FindUser(name string) ([]User, error) {
 	pwent, err := C.getpwnam(C.CString(name))
 	if pwent == nil {
-		return User{}, err
+		return []User{}, err
 	}
-	return pwentToUser(pwent), nil
+	return []User{pwentToUser(pwent)}, nil
 }
 
 // Return a list of those users on the system whose login name or full name
