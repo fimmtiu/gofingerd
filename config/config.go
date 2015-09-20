@@ -7,12 +7,12 @@ import "time"
 import "github.com/BurntSushi/toml"
 
 type Config struct {
-	AllowQueryForwarding bool      // FIXME: Not implemented yet
-	AllowUserListing bool
+	AllowQueryForwarding   bool
+	AllowUserListing       bool
 	AllowApproximateSearch bool
-	Port int
-	NetworkTimeout time.Duration   // Specified in seconds
-	ConfigFile string
+	Port                   int
+	NetworkTimeout         time.Duration // Specified in seconds
+	ConfigFile             string
 }
 
 func ReadConfig() Config {
@@ -30,7 +30,7 @@ func ReadConfig() Config {
 }
 
 // The default setup is very restrictive, security-wise.
-func defaultConfig() (Config) {
+func defaultConfig() Config {
 	return Config{
 		false,
 		false,

@@ -21,7 +21,7 @@ func main() {
 	// FIXME: It would be nice to provide an option to daemonize the process here.
 
 	// Open the listening socket
-	listener, err := net.Listen("tcp", ":" + strconv.Itoa(conf.Port))
+	listener, err := net.Listen("tcp", ":"+strconv.Itoa(conf.Port))
 	if listener == nil {
 		log.Fatalf("ERROR: Can't listen on port %d: %s", conf.Port, err.Error())
 	}
@@ -90,7 +90,7 @@ func readRequest(conn net.Conn) (r.Request, error) {
 // Connect to a remote server, forward the user's query to them, and echo the response.
 func RespondWithForwardedQuery(conn net.Conn, request r.Request) {
 	host, forwarded_request := request.NextForwardingRequest()
-	forward_conn, err := net.Dial("tcp", host + ":79")
+	forward_conn, err := net.Dial("tcp", host+":79")
 	if err != nil {
 		log.Printf("Can't connect to %s on behalf of %s: %s.", host, conn.RemoteAddr().String(), err.Error())
 		fmt.Fprintf(conn, "Can't connect to %s: %s.\r\n", host, err.Error())

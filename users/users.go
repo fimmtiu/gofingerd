@@ -24,15 +24,15 @@ import "strings"
 
 const (
 	ListAll = 0
-	Search = 1
-	Find = 2
+	Search  = 1
+	Find    = 2
 )
 
 type User struct {
 	LoginName string
-	FullName string
-	HomeDir string
-	Shell string
+	FullName  string
+	HomeDir   string
+	Shell     string
 }
 
 // The request and response parameters are all in one struct so that we can
@@ -41,16 +41,16 @@ type User struct {
 // enough that we have to allocate the response channels on every request
 // in the first place.)
 type UserCommand struct {
-	Type int
+	Type            int
 	ResponseChannel chan UserCommand
-	Name string
-	Users []User
-	Err   error
+	Name            string
+	Users           []User
+	Err             error
 }
 
 func StartService(channel chan UserCommand) {
 	for {
-		cmd := <- channel
+		cmd := <-channel
 		switch cmd.Type {
 		case ListAll:
 			cmd.Users, cmd.Err = ListAllUsers()
