@@ -29,7 +29,7 @@ func main() {
 	log.Printf("Listening on port %d.", conf.Port)
 
 	// Spin up the user service goroutine. (See comments in users.go.)
-	userService = make(chan u.UserCommand)
+	userService = make(chan u.UserCommand, 1)
 	go u.StartService(userService)
 
 	// For every incoming connection, spin up a goroutine to handle the request.
@@ -120,7 +120,7 @@ func RespondWithForwardedQuery(conn net.Conn, request r.Request) {
 
 // Show a list of all users on the system.
 func RespondWithUserList(conn net.Conn) {
-	responseChan := make(chan u.UserCommand)
+	responseChan := make(chan u.UserCommand, 1)
 	cmd := u.UserCommand{u.ListAll, responseChan, "", nil, nil}
 	userService <- cmd
 	cmd = <-responseChan
@@ -139,7 +139,7 @@ func RespondWithUserList(conn net.Conn) {
 
 // Show all users whose name contains the client's input.
 func RespondWithApproximateSearch(conn net.Conn, request r.Request) {
-	responseChan := make(chan u.UserCommand)
+	responseChan := make(chan u.UserCommand, 1)
 	cmd := u.UserCommand{u.Search, responseChan, request.User, nil, nil}
 	userService <- cmd
 	cmd = <-responseChan
@@ -163,7 +163,7 @@ func RespondWithApproximateSearch(conn net.Conn, request r.Request) {
 
 // Show the user whose exact name was provided by the client.
 func RespondWithExactSearch(conn net.Conn, request r.Request) {
-	responseChan := make(chan u.UserCommand)
+	responseChan := make(chan u.UserCommand, 1)
 	cmd := u.UserCommand{u.Find, responseChan, request.User, nil, nil}
 	userService <- cmd
 	cmd = <-responseChan
